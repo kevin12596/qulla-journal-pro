@@ -642,3 +642,137 @@ window.addEventListener('load', () => {
     const oc = $('ocr_clear'); if (oc) oc.addEventListener('click', () => $('ocr_input').value = '');
   }, 200);
 });
+
+// ===== Watchlist =====
+const LS_WATCH = 'qjp_watchlist';
+function loadWatch() { try { return JSON.parse(localStorage.getItem(LS_WATCH) || '[]'); } catch { return []; } }
+function saveWatch(w) { localStorage.setItem(LS_WATCH, JSON.stringify(w)); }
+
+function renderWatch() {
+  const list = $('watch_list');
+  const items = loadWatch();
+  if (items.length === 0) {
+    list.innerHTML = '<div class="hint" style="text-align:center;padding:30px">尚無觀察標的</div>';
+    return;
+  }
+  list.innerHTML = items.map((w, i) => `<div class="trade" data-i="${i}" style="grid-template-columns:80px 1fr auto">
+    <div><div class="sym">${w.symbol}</div><div class="name">${w.name||''}</div></div>
+    <div>
+      <div>${w.reason} ${w.trigger?'｜觸發 '+w.trigger:''}</div>
+      <div class="meta">${w.note||''}</div>
+    </div>
+    <button class="btn sm danger" data-del="${i}">刪</button>
+  </div>`).join('');
+  list.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const items = loadWatch();
+    items.splice(+b.dataset.del, 1);
+    saveWatch(items);
+    renderWatch();
+    toast('已刪除');
+  }));
+}
+
+function setupWatch() {
+  $('watch_add').addEventListener('click', () => {
+    $('watch_form').style.display = 'block';
+    ['w_symbol','w_name','w_trigger','w_note'].forEach(id => $(id).value = '');
+  });
+  $('watch_cancel').addEventListener('click', () => $('watch_form').style.display = 'none');
+  $('watch_save').addEventListener('click', () => {
+    const sym = $('w_symbol').value.trim();
+    if (!sym) { toast('請填代碼','err'); return; }
+    const items = loadWatch();
+    items.push({
+      symbol: sym, name: $('w_name').value.trim(),
+      reason: $('w_reason').value, trigger: parseFloat($('w_trigger').value)||null,
+      note: $('w_note').value.trim(), added_at: today()
+    });
+    saveWatch(items);
+    $('watch_form').style.display = 'none';
+    renderWatch();
+    toast('已加入觀察');
+  });
+}
+
+// ===== Weekend Review =====
+function renderReview() {
+  const days7 = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
+  const recent = state.trades.filter(t => (t.entry_date >= days7) || (t.exit_date >= days7));
+  const closed7 = recent.filter(t => t.status === 'CLOSED');
+
+  let html = '';
+  if (closed7.length === 0) {
+    $('review_summary').innerHTML = '<div class="hint">本週尚無平倉交易</div>';
+  } else {
+    const rms = closed7.map(calcRMultiple).filter(x => x != null);
+    const wins = rms.filter(x => x > 0);
+    const totalR = rms.reduce((a,b)=>a+b,0);
+    $('review_summary').innerHTML = `<div class="r-row">
+      <div><span class="lbl">本週交易</span><span class="mono big">${closed7.length}</span></div>
+      <div><span class="lbl">勝率</span><span class="mono big">${(wins.length/rms.length*100).toFixed(0)}%</span></div>
+      <div><span class="lbl">累計R</span><span class="mono big ${totalR>=0?'pos':'neg'}">${fmtR(totalR)}</span></div>
+      <div><span class="lbl">最大贏</span><span class="mono pos">${rms.length?fmtR(Math.max(...rms)):'—'}</span></div>
+      <div><span class="lbl">最大輸</span><span class="mono neg">${rms.length?fmtR(Math.min(...rms)):'—'}</span></div>
+    </div>`;
+  }
+
+  // Trade-by-trade reflection
+  if (recent.length === 0) {
+    $('review_trades').innerHTML = '<div class="hint">本週無交易紀錄</div>';
+  } else {
+    $('review_trades').innerHTML = recent.map(t => {
+      const rm = calcRMultiple(t);
+      const r = calcR(t.entry_price, t.stop, t.side);
+      const checks = [];
+      if (rm != null) {
+        if (rm <= -1) checks.push('🔴 虧損超過 1R（檢查：止損是否執行慢了？）');
+        else if (rm < 0) checks.push('🟡 小虧出場（聰明，但確認是否有更早訊號）');
+        else if (rm >= 2) checks.push('✅ 達到 2R+（這是 winner，分析突破特徵）');
+      }
+      if (r && r/t.entry_price*100 > 8) checks.push('⚠️ R 值偏大 (>8%)，下次可考慮更緊止損');
+      if (t.note && t.note.match(/#\S+/g)) checks.push('🏷 標籤：' + t.note.match(/#\S+/g).join(' '));
+      return `<div class="trade" style="grid-template-columns:80px 1fr auto">
+        <div><div class="sym">${t.symbol}</div><div class="name">${t.name||''}</div></div>
+        <div>
+          <div>${t.entry_date} → ${t.exit_date||'持有中'}｜${rm!=null?fmtR(rm):'—'}</div>
+          <div class="meta">${checks.join(' · ')||'—'}</div>
+        </div>
+        <div class="rmult ${rm>=0?'pos':'neg'}">${rm!=null?fmtR(rm):'—'}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // Tag stats
+  const tags = {};
+  state.trades.forEach(t => {
+    const m = (t.note||'').match(/#\S+/g);
+    if (m) m.forEach(tag => {
+      if (!tags[tag]) tags[tag] = { count: 0, totalR: 0 };
+      tags[tag].count++;
+      const rm = calcRMultiple(t);
+      if (rm != null) tags[tag].totalR += rm;
+    });
+  });
+  if (Object.keys(tags).length === 0) {
+    $('review_tags').innerHTML = '<div class="hint">尚未使用標籤</div>';
+  } else {
+    $('review_tags').innerHTML = Object.entries(tags).sort((a,b)=>b[1].count-a[1].count).map(([t,v]) =>
+      `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span>${t}</span><span>${v.count} 次｜累計 ${fmtR(v.totalR)}</span></div>`
+    ).join('');
+  }
+}
+
+// hook into tab switch
+const _origSetupTabs = setupTabs;
+setupTabs = function() {
+  _origSetupTabs();
+  document.querySelectorAll('.tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.v === 'watch') renderWatch();
+      if (btn.dataset.v === 'review') renderReview();
+    });
+  });
+  setupWatch();
+};
