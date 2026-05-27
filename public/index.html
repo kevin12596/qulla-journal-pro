@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Qulla Journal Pro · K哥的交易系統</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🦐 Qulla Journal <span class="ver">Pro</span></div>
+  <div class="account-bar">
+    <span class="lbl">帳戶</span>
+    <span id="hdr_account" class="mono">—</span>
+    <span class="lbl">總R</span>
+    <span id="hdr_total_r" class="mono">—</span>
+    <span class="lbl">勝率</span>
+    <span id="hdr_winrate" class="mono">—</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-v="journal">📒 交易日誌</button>
+  <button class="tab" data-v="calc">🧮 部位計算</button>
+  <button class="tab" data-v="dash">📊 期望值</button>
+  <button class="tab" data-v="active">🎯 持倉中</button>
+  <button class="tab" data-v="settings">⚙️ 設定</button>
+</nav>
+
+<main>
+
+<!-- ========== 交易日誌 ========== -->
+<section class="view active" id="v_journal">
+  <div class="card">
+    <div class="card-head">
+      <h2>新增/編輯交易</h2>
+      <button class="btn ghost" id="j_clear">清空表單</button>
+    </div>
+
+    <input type="hidden" id="j_id">
+
+    <div class="form-grid">
+      <div class="field">
+        <label>股票代碼</label>
+        <div style="display:flex;gap:6px">
+          <input id="j_symbol" placeholder="例：3035" style="flex:1">
+          <button class="btn sm" id="j_fetch" type="button">🔄 拓</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>名稱</label>
+        <input id="j_name" placeholder="智原">
+      </div>
+      <div class="field">
+        <label>市場</label>
+        <select id="j_market">
+          <option value="TWSE">上市</option>
+          <option value="TPEX">上櫃</option>
+          <option value="EMG">興櫃</option>
+          <option value="US">美股</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>方向</label>
+        <select id="j_side">
+          <option value="LONG">做多</option>
+          <option value="SHORT">做空</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>進場日期</label>
+        <input type="date" id="j_entry_date">
+      </div>
+      <div class="field">
+        <label>進場均價</label>
+        <input type="number" step="0.01" id="j_entry_price" placeholder="211.00">
+      </div>
+      <div class="field">
+        <label>股數</label>
+        <input type="number" id="j_shares" placeholder="1000">
+      </div>
+      <div class="field">
+        <label>止損價</label>
+        <input type="number" step="0.01" id="j_stop" placeholder="205.00">
+      </div>
+
+      <div class="field">
+        <label>當日最高</label>
+        <input type="number" step="0.01" id="j_day_high">
+      </div>
+      <div class="field">
+        <label>當日最低（自動填止損用）</label>
+        <input type="number" step="0.01" id="j_day_low">
+      </div>
+      <div class="field">
+        <label>ADR%</label>
+        <input type="number" step="0.1" id="j_adr" placeholder="5.0">
+      </div>
+      <div class="field">
+        <label>狀態</label>
+        <select id="j_status">
+          <option value="OPEN">持有中</option>
+          <option value="CLOSED">已平倉</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>出場日期</label>
+        <input type="date" id="j_exit_date">
+      </div>
+      <div class="field">
+        <label>出場均價</label>
+        <input type="number" step="0.01" id="j_exit_price">
+      </div>
+      <div class="field">
+        <label>出場原因</label>
+        <select id="j_exit_reason">
+          <option value="">—</option>
+          <option value="STOP">觸發止損</option>
+          <option value="2R">達 2R 減倉</option>
+          <option value="3R">達 3R 減倉</option>
+          <option value="EMA10">跌破 EMA10</option>
+          <option value="EMA20">跌破 EMA20</option>
+          <option value="FAILED_BREAKOUT">假突破當日出</option>
+          <option value="DISCRETION">主觀判斷</option>
+          <option value="OTHER">其他</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>突破點</label>
+        <input type="number" step="0.01" id="j_breakout" placeholder="若是突破單填入">
+      </div>
+
+      <div class="field full">
+        <label>進場理由 / 形態（Setup）</label>
+        <select id="j_setup">
+          <option value="">—</option>
+          <option value="EP">EP（爆量突破）</option>
+          <option value="BREAKOUT">高位整理突破</option>
+          <option value="PULLBACK">回踩 EMA10</option>
+          <option value="EARNINGS_GAP">財報跳空</option>
+          <option value="OTHER">其他</option>
+        </select>
+      </div>
+      <div class="field full">
+        <label>備註 / 心得</label>
+        <textarea id="j_note" rows="3" placeholder="這筆怎麼進的？學到什麼？"></textarea>
+      </div>
+    </div>
+
+    <!-- 自動計算結果 -->
+    <div class="calc-result" id="j_preview">
+      <div class="r-row">
+        <div><span class="lbl">1R / 股</span><span id="j_r" class="mono big">—</span></div>
+        <div><span class="lbl">R%</span><span id="j_rpct" class="mono">—</span></div>
+        <div><span class="lbl">R/ADR</span><span id="j_radr" class="mono">—</span></div>
+        <div><span class="lbl">投入</span><span id="j_invest" class="mono">—</span></div>
+        <div><span class="lbl">風險金額</span><span id="j_risk" class="mono">—</span></div>
+        <div><span class="lbl">2R 價</span><span id="j_2r" class="mono">—</span></div>
+        <div><span class="lbl">3R 價</span><span id="j_3r" class="mono">—</span></div>
+        <div><span class="lbl">目前 R-multiple</span><span id="j_rmult" class="mono big">—</span></div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" id="j_save">💾 儲存</button>
+      <button class="btn danger" id="j_delete" style="display:none">🗑 刪除</button>
+    </div>
+  </div>
+
+  <!-- 列表 -->
+  <div class="card">
+    <div class="card-head">
+      <h2>所有交易</h2>
+      <div class="filters">
+        <select id="f_status">
+          <option value="">全部</option>
+          <option value="OPEN">持有中</option>
+          <option value="CLOSED">已平倉</option>
+        </select>
+        <input id="f_search" placeholder="🔍 代碼或名稱">
+        <button class="btn ghost" id="export_csv">匯出 CSV</button>
+      </div>
+    </div>
+    <div id="j_list" class="trade-list"></div>
+  </div>
+
+  <!-- OCR 對帳單匯入 -->
+  <div class="card">
+    <div class="card-head">
+      <h2>📄 貼上成交對帳單（OCR 自動建單）</h2>
+    </div>
+    <p class="hint">貼上三価、富邦、永豐金、元大等券商的成交對帳單 JSON（希夏讀完圖交付你的格式），或者貼上手打的成交明細。</p>
+    <textarea id="ocr_input" rows="6" style="width:100%;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);padding:10px;border-radius:6px;font-family:monospace" placeholder='格式範例：\n[{"symbol":"2449","name":"京元電子","side":"LONG","entry_price":340,"shares":45,"entry_date":"2026-05-27"},...]'></textarea>
+    <div class="actions">
+      <button class="btn primary" id="ocr_import">匯入並合併同代碼</button>
+      <button class="btn ghost" id="ocr_clear">清空</button>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 部位計算 ========== -->
+<section class="view" id="v_calc">
+  <div class="card">
+    <h2>部位計算（進場前必算）</h2>
+    <div class="form-grid">
+      <div class="field">
+        <label>進場價</label>
+        <div style="display:flex;gap:6px">
+          <input type="number" step="0.01" id="c_entry" style="flex:1">
+          <input id="c_symbol" placeholder="或輸入代碼" style="width:90px">
+          <button class="btn sm" id="c_fetch" type="button">🔄</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>止損價</label>
+        <input type="number" step="0.01" id="c_stop">
+      </div>
+      <div class="field">
+        <label>ADR%</label>
+        <input type="number" step="0.1" id="c_adr">
+      </div>
+    </div>
+    <div class="calc-result">
+      <div class="r-row">
+        <div><span class="lbl">1R / 股</span><span id="c_r" class="mono big">—</span></div>
+        <div><span class="lbl">R%</span><span id="c_rpct" class="mono">—</span></div>
+        <div><span class="lbl">R/ADR</span><span id="c_radr" class="mono big">—</span></div>
+        <div><span class="lbl">建議股數</span><span id="c_shares" class="mono big">—</span></div>
+        <div><span class="lbl">投入金額</span><span id="c_invest" class="mono">—</span></div>
+        <div><span class="lbl">占帳戶 %</span><span id="c_account_pct" class="mono">—</span></div>
+        <div><span class="lbl">2R 目標</span><span id="c_2r" class="mono">—</span></div>
+        <div><span class="lbl">3R 目標</span><span id="c_3r" class="mono">—</span></div>
+      </div>
+      <div id="c_verdict" class="verdict"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 期望值儀表板 ========== -->
+<section class="view" id="v_dash">
+  <div class="dash-grid">
+    <div class="stat-card big">
+      <div class="lbl">每筆期望值（你的真實 edge）</div>
+      <div id="d_exp" class="big-num">—</div>
+      <div class="hint">公式：勝率×平均賺R − 敗率×平均賠R｜目標：> +0.5R</div>
+    </div>
+
+    <div class="stat-card"><div class="lbl">總交易（平倉）</div><div id="d_total" class="big-num">0</div></div>
+    <div class="stat-card"><div class="lbl">勝率</div><div id="d_winrate" class="big-num">—</div></div>
+    <div class="stat-card"><div class="lbl">平均賺 R</div><div id="d_avg_win" class="big-num pos">—</div></div>
+    <div class="stat-card"><div class="lbl">平均賠 R</div><div id="d_avg_loss" class="big-num neg">—</div></div>
+    <div class="stat-card"><div class="lbl">累計 R</div><div id="d_total_r" class="big-num">—</div></div>
+    <div class="stat-card"><div class="lbl">累計損益 (TWD)</div><div id="d_total_pnl" class="big-num">—</div></div>
+    <div class="stat-card"><div class="lbl">最大連勝</div><div id="d_max_win" class="big-num">—</div></div>
+    <div class="stat-card"><div class="lbl">最大連敗</div><div id="d_max_loss" class="big-num">—</div></div>
+    <div class="stat-card"><div class="lbl">最大單筆 +R</div><div id="d_best" class="big-num pos">—</div></div>
+    <div class="stat-card"><div class="lbl">最大單筆 −R</div><div id="d_worst" class="big-num neg">—</div></div>
+  </div>
+
+  <div class="card">
+    <h2>R-multiple 分布</h2>
+    <div id="d_histogram" class="histogram"></div>
+  </div>
+
+  <div class="card">
+    <h2>按出場原因統計</h2>
+    <div id="d_exit_stats"></div>
+  </div>
+
+  <div class="card">
+    <h2>月度績效</h2>
+    <div id="d_monthly"></div>
+  </div>
+
+  <p class="hint">📌 跑滿 30-50 筆，這裡的數字才有統計意義。期望值為正 = 系統對你有效。</p>
+</section>
+
+<!-- ========== 持倉中 ========== -->
+<section class="view" id="v_active">
+  <div class="card">
+    <h2>持倉狀態總覽</h2>
+    <div id="active_list"></div>
+  </div>
+</section>
+
+<!-- ========== 設定 ========== -->
+<section class="view" id="v_settings">
+  <div class="card">
+    <h2>交戰規則（會用在計算）</h2>
+    <div class="form-grid">
+      <div class="field">
+        <label>帳戶大小 (TWD)</label>
+        <input type="number" id="s_account" placeholder="3000000">
+      </div>
+      <div class="field">
+        <label>每筆風險 %</label>
+        <input type="number" step="0.1" id="s_risk_pct" placeholder="1.0">
+      </div>
+      <div class="field">
+        <label>單一部位上限 %</label>
+        <input type="number" step="1" id="s_max_pos_pct" placeholder="40">
+      </div>
+      <div class="field">
+        <label>R/ADR 上限</label>
+        <input type="number" step="0.1" id="s_max_radr" placeholder="1.5">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="s_save">💾 儲存設定</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>資料管理</h2>
+    <div class="actions">
+      <button class="btn" id="export_json">📤 匯出全部 JSON</button>
+      <button class="btn" id="import_json">📥 匯入 JSON</button>
+      <input type="file" id="import_file" accept=".json" style="display:none">
+      <button class="btn danger" id="reset_all">🗑 清空所有資料</button>
+    </div>
+    <p class="hint">資料儲存在你的瀏覽器 LocalStorage。建議每週匯出 JSON 備份。</p>
+  </div>
+
+  <div class="card">
+    <h2>關於</h2>
+    <p>由希夏 🦐 為 K哥打造，依據 Kristjan Kullamägi（Qullamäggie）公開方法。</p>
+    <p class="hint">v0.1 · LocalStorage 版 · 即將支援 D1 雲端同步 + 希夏自動寫入</p>
+  </div>
+</section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>
