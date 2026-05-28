@@ -46,8 +46,8 @@
       <div class="field">
         <label>股票代碼</label>
         <div style="display:flex;gap:6px">
-          <input id="j_symbol" placeholder="例：3035" style="flex:1">
-          <button class="btn sm" id="j_fetch" type="button">🔄 拓</button>
+          <input id="j_symbol" placeholder="例：3035" style="flex:1;min-width:0">
+          <button class="btn sm primary" id="j_fetch" type="button" title="自動帶入收盤/ADR/EMA/推薦止損" style="flex-shrink:0;white-space:nowrap">🔄 帶入</button>
         </div>
       </div>
       <div class="field">
@@ -237,7 +237,26 @@
         <div><span class="lbl">3R 目標</span><span id="c_3r" class="mono">—</span></div>
       </div>
       <div id="c_verdict" class="verdict"></div>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn primary" id="c_to_journal" type="button">📝 用這組參數新增日誌</button>
+      </div>
     </div>
+  </div>
+
+  <!-- ===== Qullamaggie 選股檢查 ===== -->
+  <div class="card">
+    <h2>🎯 Qullamaggie 選股檢查（完整版）</h2>
+    <p class="hint">輸入代碼，自動檢查動能 / 趨勢 / 整理形態 / 量能 / 入場條件，直接給「買 / 等 / 不碰」建議。台股輸數字（例 2330），美股輸代號（例 NVDA）。</p>
+    <div class="form-grid">
+      <div class="field">
+        <label>股票代碼</label>
+        <div style="display:flex;gap:6px">
+          <input id="qs_symbol" placeholder="例：NVDA / 2330 / 6223" style="flex:1;min-width:0">
+          <button class="btn primary" id="qs_run" type="button" style="flex-shrink:0;white-space:nowrap">🔍 檢查</button>
+        </div>
+      </div>
+    </div>
+    <div id="qs_result" style="margin-top:14px"></div>
   </div>
 </section>
 
@@ -284,6 +303,10 @@
 <section class="view" id="v_active">
   <div class="card">
     <h2>持倉狀態總覽</h2>
+    <div class="actions" style="margin-bottom:12px">
+      <button class="btn primary" id="copy_orders" type="button">📋 複製明日掛單清單</button>
+      <button class="btn" id="refresh_active" type="button">🔄 重新抓即時價</button>
+    </div>
     <div id="active_list"></div>
   </div>
 </section>
@@ -365,6 +388,7 @@
     </div>
     <div class="actions">
       <button class="btn primary" id="s_save">💾 儲存設定</button>
+      <button class="btn" id="s_reset_auth">🔑 重設 Auth Key</button>
     </div>
   </div>
 

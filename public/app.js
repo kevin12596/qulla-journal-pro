@@ -33,15 +33,69 @@ function toast(msg, type = 'ok') {
   setTimeout(() => t.className = 'toast', 2500);
 }
 
-// ===== Storage =====
-function loadAll() {
+// ===== Storage (LocalStorage + D1 cloud sync) =====
+const CLOUD = {
+  base: '/api/journal',
+  user: 'kc',
+  // 從 localStorage 讀，使用者第一次用：在 console 跑 localStorage.setItem('qjp_auth','xxxx')
+  authKey: () => localStorage.getItem('qjp_auth') || '',
+  enabled: true, // 設 false 可暫時退回純本地模式
+};
+
+async function cloudFetch(path, opts = {}) {
+  if (!CLOUD.enabled) throw new Error('cloud disabled');
+  const url = `${CLOUD.base}${path}${path.includes('?') ? '&' : '?'}user=${CLOUD.user}`;
+  const headers = { 'Content-Type': 'application/json', 'X-Auth-Key': CLOUD.authKey(), ...(opts.headers||{}) };
+  const r = await fetch(url, { ...opts, headers });
+  if (!r.ok) throw new Error(`cloud ${r.status}`);
+  return r.json();
+}
+
+function loadLocal() {
   try {
     state.trades = JSON.parse(localStorage.getItem(LS.TRADES) || '[]');
     state.settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS.SETTINGS) || '{}') };
   } catch (e) { console.error(e); }
 }
-function saveTrades() { localStorage.setItem(LS.TRADES, JSON.stringify(state.trades)); }
-function saveSettings() { localStorage.setItem(LS.SETTINGS, JSON.stringify(state.settings)); }
+
+function loadAll() { loadLocal(); }
+
+// 啟動後在背景做雲端拉取（覆蓋本地，以雲端為準）
+async function cloudPull() {
+  try {
+    const data = await cloudFetch('/all');
+    if (data && Array.isArray(data.trades)) {
+      state.trades = data.trades;
+      localStorage.setItem(LS.TRADES, JSON.stringify(state.trades));
+    }
+    if (data && data.settings) {
+      state.settings = { ...DEFAULTS, ...data.settings };
+      localStorage.setItem(LS.SETTINGS, JSON.stringify(state.settings));
+    }
+    if (typeof renderJournalList === 'function') renderJournalList();
+    if (typeof updateHeader === 'function') updateHeader();
+    toast('☁️ 已從雲端同步');
+  } catch (e) {
+    console.warn('cloudPull failed:', e.message);
+    toast('雲端同步失敗，使用本地資料', 'warn');
+  }
+}
+
+function saveTrades() {
+  localStorage.setItem(LS.TRADES, JSON.stringify(state.trades));
+  // 雲端：以 bulk replace 簡化（資料量小，每次幾百筆內 OK）
+  if (CLOUD.enabled) {
+    cloudFetch('/trades-bulk', { method: 'POST', body: JSON.stringify(state.trades) })
+      .catch(e => console.warn('cloud saveTrades:', e.message));
+  }
+}
+function saveSettings() {
+  localStorage.setItem(LS.SETTINGS, JSON.stringify(state.settings));
+  if (CLOUD.enabled) {
+    cloudFetch('/settings', { method: 'PUT', body: JSON.stringify(state.settings) })
+      .catch(e => console.warn('cloud saveSettings:', e.message));
+  }
+}
 
 // ===== Calculations =====
 function calcR(entry, stop, side = 'LONG') {
@@ -239,11 +293,23 @@ function updateCalc() {
   const rpct = r/entry*100;
   const radr = adr ? rpct/adr : null;
   const riskBudget = account * riskPct;
-  let shares = Math.floor(riskBudget / r / 1000) * 1000;  // 整張化
+  const rawShares = riskBudget / r;  // 未整張化股數
+  let shares = Math.floor(rawShares / 1000) * 1000;  // 整張化
+  let lots = shares / 1000;
+  let useFractional = false;
+  // 不足一張 → fallback 零股（台股1股為單位）
+  if (shares === 0 && rawShares >= 1) {
+    shares = Math.floor(rawShares);
+    useFractional = true;
+  }
   let invest = shares * entry;
   // 部位上限約束
   if (invest > account * maxPosPct) {
-    shares = Math.floor(account * maxPosPct / entry / 1000) * 1000;
+    if (useFractional) {
+      shares = Math.floor(account * maxPosPct / entry);
+    } else {
+      shares = Math.floor(account * maxPosPct / entry / 1000) * 1000;
+    }
     invest = shares * entry;
   }
   const accountPct = invest/account*100;
@@ -251,7 +317,7 @@ function updateCalc() {
   $('c_r').textContent = r.toFixed(2);
   $('c_rpct').textContent = rpct.toFixed(2)+'%';
   $('c_radr').textContent = radr ? radr.toFixed(2)+'×' : '—';
-  $('c_shares').textContent = fmt(shares);
+  $('c_shares').textContent = fmt(shares) + (useFractional ? ' 股（零股）' : ' 股');
   $('c_invest').textContent = fmt(invest);
   $('c_account_pct').textContent = accountPct.toFixed(1)+'%';
   $('c_2r').textContent = (entry + 2*r).toFixed(2);
@@ -430,6 +496,20 @@ function updateHeader() {
   $('hdr_winrate').textContent = winrate.toFixed(0) + '%';
 }
 
+// ===== Auth Setup (首次使用要設 auth key) =====
+function ensureAuthKey() {
+  if (!CLOUD.enabled) return;
+  if (CLOUD.authKey()) return;
+  // 用 prompt 讓使用者輸入 auth key（手機 Safari 也有）
+  const k = window.prompt('🔑 首次設定：請輸入 Auth Key 以啟用雲端同步\n（K哥用：kc-2026-qulla）');
+  if (k && k.trim()) {
+    localStorage.setItem('qjp_auth', k.trim());
+    toast('✅ Auth Key 已設定，正在同步…');
+  } else {
+    toast('⚠️ 未設定 Auth Key，僅本地模式', 'warn');
+  }
+}
+
 // ===== Init =====
 function init() {
   loadAll();
@@ -438,6 +518,12 @@ function init() {
   clearForm();
   renderJournalList();
   updateHeader();
+
+  // 首次使用要設 auth key（沒設就跳 prompt）
+  ensureAuthKey();
+
+  // 背景拉雲端最新資料（不阻塞 UI）
+  if (CLOUD.enabled) setTimeout(cloudPull, 200);
 
   // Form events
   ['j_entry_price','j_stop','j_shares','j_adr','j_exit_price','j_side'].forEach(id =>
@@ -448,15 +534,36 @@ function init() {
     if (!t.symbol || !t.entry_price || !t.shares || !t.stop) {
       toast('請填股票代碼、進場價、股數、止損', 'err'); return;
     }
+    // 名稱一致性檢查：如果代碼查得到中文名，且與表單不同 → 提示確認
+    const proceed = async () => {
+      try {
+        const d = await apiAnalyze(t.symbol);
+        if (d && d.name && t.name && d.name !== t.name) {
+          const ok = confirm(`⚠️ 代碼 ${t.symbol} 官方名稱為「${d.name}」，\n但你填的是「${t.name}」。\n\n要自動改為「${d.name}」嗎？\n\n按「確定」套用官方名稱；「取消」保留你填的。`);
+          if (ok) t.name = d.name;
+        } else if (d && d.name && !t.name) {
+          t.name = d.name;
+        }
+      } catch {}
+      doSave(t);
+    };
+    proceed();
+  });
+
+  function doSave(t) {
     const idx = state.trades.findIndex(x => x.id === t.id);
+    const isNew = idx < 0;
     if (idx >= 0) state.trades[idx] = { ...state.trades[idx], ...t };
     else state.trades.push(t);
     saveTrades();
     toast(idx >= 0 ? '已更新' : '已新增');
+    if (isNew && t.status === 'OPEN' && t.side === 'LONG') {
+      showOrderReminder(t);
+    }
     clearForm();
     renderJournalList();
     updateHeader();
-  });
+  }
 
   $('j_delete').addEventListener('click', () => {
     if (!state.editingId) return;
@@ -478,6 +585,22 @@ function init() {
 
   // Settings
   $('s_save').addEventListener('click', saveSettingsFromForm);
+  const resetAuthBtn = $('s_reset_auth');
+  if (resetAuthBtn) {
+    resetAuthBtn.addEventListener('click', () => {
+      const cur = localStorage.getItem('qjp_auth') || '';
+      const k = window.prompt('重設 Auth Key（留空 = 清除）', cur);
+      if (k === null) return;
+      if (k.trim()) {
+        localStorage.setItem('qjp_auth', k.trim());
+        toast('✅ Auth Key 已更新，重新同步中…');
+        setTimeout(cloudPull, 200);
+      } else {
+        localStorage.removeItem('qjp_auth');
+        toast('⚖️ Auth Key 已清除', 'warn');
+      }
+    });
+  }
 
   // Export/Import
   $('export_csv').addEventListener('click', exportCSV);
@@ -542,7 +665,7 @@ document.addEventListener('DOMContentLoaded', init);
 // ===== API Integration =====
 const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
   ? 'http://127.0.0.1:18792/api'
-  : '/qjp-api';  // Apache proxy 路徑
+  : '/api';  // 同源 Pages Function proxy → EC2:18792
 
 async function apiAnalyze(symbol) {
   const r = await fetch(`${API_BASE}/analyze/${symbol}`);
@@ -556,6 +679,11 @@ async function fetchJournalData() {
   toast('🔄 抓取中...', 'ok');
   try {
     const d = await apiAnalyze(sym);
+    if (d.name && !$('j_name').value) $('j_name').value = d.name;
+    if (d.exchange) {
+      const sel = $('j_market');
+      if (sel && !sel.dataset.userSet) sel.value = d.exchange;
+    }
     if (!$('j_entry_price').value) $('j_entry_price').value = d.close;
     $('j_day_high').value = d.high;
     $('j_day_low').value = d.low;
@@ -638,10 +766,143 @@ window.addEventListener('load', () => {
   setTimeout(() => {
     const fb = $('j_fetch'); if (fb) fb.addEventListener('click', fetchJournalData);
     const cb = $('c_fetch'); if (cb) cb.addEventListener('click', fetchCalcData);
+    // 代碼欄輸入完點離（blur）自動抓資料
+    const jSym = $('j_symbol');
+    if (jSym) {
+      jSym.addEventListener('blur', () => {
+        const v = jSym.value.trim();
+        if (v && v.length >= 4 && !$('j_entry_price').value) fetchJournalData();
+      });
+      jSym.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); fetchJournalData(); }
+      });
+    }
+    const cSym = $('c_symbol');
+    if (cSym) {
+      cSym.addEventListener('blur', () => {
+        const v = cSym.value.trim();
+        if (v && v.length >= 4 && !$('c_entry').value) fetchCalcData();
+      });
+      cSym.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); fetchCalcData(); }
+      });
+    }
     const oi = $('ocr_import'); if (oi) oi.addEventListener('click', importFromOCR);
     const oc = $('ocr_clear'); if (oc) oc.addEventListener('click', () => $('ocr_input').value = '');
+    const co = $('copy_orders'); if (co) co.addEventListener('click', copyTomorrowOrders);
+    const ra = $('refresh_active'); if (ra) ra.addEventListener('click', refreshActivePrices);
+    const ctj = $('c_to_journal'); if (ctj) ctj.addEventListener('click', calcToJournal);
   }, 200);
 });
+
+// ===== 計算頁一鍵帶入日誌 =====
+function calcToJournal() {
+  const entry = parseFloat($('c_entry').value) || 0;
+  const stop = parseFloat($('c_stop').value) || 0;
+  const adr = parseFloat($('c_adr').value) || 0;
+  const sym = ($('c_symbol').value || '').trim();
+  // 建議股數從顯示區讀（純數字）
+  const sharesText = ($('c_shares').textContent || '').replace(/[^0-9]/g, '');
+  const shares = parseInt(sharesText) || 0;
+  if (!entry || !stop || !shares) {
+    toast('請先填進場/止損並估出建議股數', 'err'); return;
+  }
+  // 切 tab 到日誌
+  document.querySelector('.tab[data-v="journal"]').click();
+  // 清空表單（避免覇變編輯中的）
+  clearForm();
+  // 填值
+  if (sym) $('j_symbol').value = sym;
+  $('j_entry_price').value = entry;
+  $('j_stop').value = stop;
+  $('j_shares').value = shares;
+  if (adr) $('j_adr').value = adr;
+  $('j_entry_date').value = today();
+  $('j_status').value = 'OPEN';
+  // 如果有代碼 → 自動拓名稱
+  if (sym && sym.length >= 4) {
+    fetchJournalData();
+  } else {
+    updatePreview();
+    toast('✅ 已帶入日誌，記得填代碼/名稱後儲存');
+  }
+}
+
+// ===== 進場後掛單提醒 Modal =====
+function showOrderReminder(t) {
+  const r = calcR(t.entry_price, t.stop, t.side);
+  if (!r || r <= 0) return;
+  const r2 = (t.entry_price + 2*r).toFixed(2);
+  const r3 = (t.entry_price + 3*r).toFixed(2);
+  const third = Math.floor(t.shares / 3);
+  const orderText = `【${t.symbol} ${t.name||''}】進場 ${t.entry_price} × ${t.shares} 股\n\n⚠️ 三張掛單請立即到券商 APP 設定：\n\n🔴 止損單（必設！）\n  跨破 ${t.stop} 市價賣出 ${t.shares} 股\n\n🟡 2R 減倉單\n  限價 ${r2} 賣出 ${third} 股（1/3）\n\n🟢 3R 減倉單\n  限價 ${r3} 賣出 ${third} 股（1/3）\n\n剩餘 ${t.shares - third*2} 股跟 10/20 EMA 動態出場`;
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:#1a1d24;border:2px solid #4f8cff;border-radius:12px;padding:24px;max-width:420px;width:100%;color:#e8eaed;">
+      <h2 style="margin:0 0 12px;color:#ffb84f;">🔔 記得到券商 APP 設掛單！</h2>
+      <pre style="white-space:pre-wrap;font-family:monospace;font-size:14px;line-height:1.6;background:#0d0f14;padding:12px;border-radius:8px;margin:0 0 16px;">${orderText}</pre>
+      <div style="display:flex;gap:8px;">
+        <button id="reminder_copy" style="flex:1;padding:10px;background:#4f8cff;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">📋 複製掛單清單</button>
+        <button id="reminder_close" style="flex:1;padding:10px;background:#3a3f4b;color:#e8eaed;border:none;border-radius:6px;font-size:14px;cursor:pointer;">關閉</button>
+      </div>
+      <p style="margin:12px 0 0;font-size:12px;color:#8b8f99;">💡 跨破止損 → Stop Market；減倉 → Limit Sell。台股條件單多爲當日有效，明日記得重掛。</p>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('#reminder_copy').onclick = () => {
+    navigator.clipboard.writeText(orderText).then(() => toast('✅ 已複製'));
+  };
+  modal.querySelector('#reminder_close').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+}
+
+// ===== 複製明日掛單清單 =====
+function copyTomorrowOrders() {
+  const open = state.trades.filter(t => t.status === 'OPEN');
+  if (!open.length) { toast('沒有持倉中的部位', 'warn'); return; }
+  const lines = ['📋 明日掛單清單（貌到券商 APP 條件單）', ''];
+  open.forEach(t => {
+    const r = calcR(t.entry_price, t.stop, t.side);
+    if (!r || r <= 0) return;
+    const r2 = (t.entry_price + 2*r).toFixed(2);
+    const r3 = (t.entry_price + 3*r).toFixed(2);
+    const third = Math.floor(t.shares / 3);
+    lines.push(`【${t.symbol} ${t.name||''}】`);
+    lines.push(`  跨破止損單：${t.stop} 市價賣出 ${t.shares} 股`);
+    lines.push(`  2R 減倉單：${r2} 限價賣出 ${third} 股`);
+    lines.push(`  3R 減倉單：${r3} 限價賣出 ${third} 股`);
+    lines.push('');
+  });
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    toast('✅ 已複製到剪貼簿，可貼到券商 APP', 'ok');
+  }).catch(() => {
+    // fallback：顯示在 prompt 讓他手動複製
+    window.prompt('手動複製：', text);
+  });
+}
+
+// ===== 重新抓持倉即時價 =====
+async function refreshActivePrices() {
+  const open = state.trades.filter(t => t.status === 'OPEN');
+  if (!open.length) { toast('沒有持倉', 'warn'); return; }
+  toast(`🔄 抓取 ${open.length} 檔中...`);
+  let done = 0, fail = 0;
+  for (const t of open) {
+    try {
+      const d = await apiAnalyze(t.symbol);
+      t.current_price = d.close;
+      t.current_ema10 = d.ema10;
+      t.current_ema20 = d.ema20;
+      done++;
+    } catch { fail++; }
+  }
+  saveTrades();
+  renderActive();
+  renderJournalList();
+  toast(`✅ 完成 ${done} 筆，失敗 ${fail} 筆`);
+}
 
 // ===== Watchlist =====
 const LS_WATCH = 'qjp_watchlist';
@@ -776,3 +1037,80 @@ setupTabs = function() {
   });
   setupWatch();
 };
+
+// ===== Qullamaggie 選股檢查 =====
+async function runQullaScreen() {
+  const sym = ($('qs_symbol').value || '').trim();
+  if (!sym) { toast('請輸入股票代碼', 'err'); return; }
+  const box = $('qs_result');
+  box.innerHTML = '<div class="hint">🔄 抓取資料並分析中（約 3-8 秒）...</div>';
+  try {
+    const r = await fetch(`${API_BASE}/qulla-screen/${encodeURIComponent(sym)}`);
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      box.innerHTML = `<div class="verdict bad">❌ ${e.error || '查詢失敗'}</div>`;
+      return;
+    }
+    const d = await r.json();
+    box.innerHTML = renderQullaScreenResult(d);
+    // 點「帶入部位計算」按鈕
+    const btn = document.getElementById('qs_use');
+    if (btn) btn.addEventListener('click', () => {
+      $('c_symbol').value = d.symbol;
+      $('c_entry').value = d.close;
+      $('c_stop').value = d.consol_low || (d.ema10 * 0.99).toFixed(2);
+      $('c_adr').value = d.adr_pct;
+      if (typeof updateCalc === 'function') updateCalc();
+      toast('✅ 已帶入部位計算（進場=收盤、止損=整理低點、ADR）');
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="verdict bad">❌ ${e.message}</div>`;
+  }
+}
+
+function renderQullaScreenResult(d) {
+  const verdictClass = d.verdict === '買' ? 'good' : (d.verdict === '等' ? 'warn' : 'bad');
+  const verdictIcon  = d.verdict === '買' ? '🚀' : (d.verdict === '等' ? '🟡' : '🔴');
+
+  const checksHtml = d.checks.map(c => {
+    const icon = c.pass ? '✅' : (c.note && c.note.startsWith('🟡') ? '🟡' : '❌');
+    return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 8px;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="flex:0 0 auto">${icon} <b>${c.item}</b></span>
+      <span class="mono" style="color:var(--muted);text-align:right">${c.value}${c.note ? `<br><span style="font-size:11px">${c.note.replace(/^[✅❌🟡🚀⚠️]\s*/, '')}</span>` : ''}</span>
+    </div>`;
+  }).join('');
+
+  const nameStr = d.name ? ` ${d.name}` : '';
+  const tickerStr = d.ticker ? ` <span class="hint">(${d.ticker})</span>` : '';
+
+  return `
+    <div class="card" style="margin:0;padding:14px;background:var(--bg-2);border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">${d.symbol}${nameStr}${tickerStr}</h3>
+        <div class="verdict ${verdictClass}" style="font-size:18px;font-weight:700">${verdictIcon} ${d.verdict}</div>
+      </div>
+      <div style="margin:8px 0 12px">
+        <div style="font-size:13px;color:var(--muted)">${d.reason}</div>
+        <div class="mono" style="margin-top:6px">收 <b>${d.close}</b>｜52週高 ${d.high_52w} (距 ${d.pct_from_52w_high}%)｜52週低 ${d.low_52w}｜52週位置 ${d.pct_in_52w_range}%</div>
+        <div class="mono">1M ${d.chg_1m != null ? d.chg_1m + '%' : '—'}｜3M ${d.chg_3m != null ? d.chg_3m + '%' : '—'}｜6M ${d.chg_6m != null ? d.chg_6m + '%' : '—'}</div>
+        <div class="mono">EMA10/20/50 = ${d.ema10} / ${d.ema20} / ${d.ema50}｜ADR ${d.adr_pct}%</div>
+        <div class="mono">整理區間（近 ${d.consol_window_days}日）${d.consol_low} ~ ${d.consol_high}｜回撤 ${d.drawdown_pct}%${d.breakout_today ? '｜<b style="color:var(--good)">今日突破</b>' : (d.near_breakout ? '｜接近突破' : '')}</div>
+      </div>
+      <div style="background:var(--bg);border-radius:6px;padding:4px 10px;margin-bottom:12px">
+        ${checksHtml}
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+        <span>分數：<b>${d.score}/${d.max_score}</b>（${d.score_pct}%）</span>
+        <button class="btn sm primary" id="qs_use" type="button">📥 帶入上方部位計算</button>
+      </div>
+    </div>`;
+}
+
+// 綁定
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('qs_run');
+  const inp = document.getElementById('qs_symbol');
+  if (btn) btn.addEventListener('click', runQullaScreen);
+  if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') runQullaScreen(); });
+});
