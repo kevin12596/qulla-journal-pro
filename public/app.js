@@ -110,6 +110,28 @@ function calcRMultiple(trade, currentPrice = null) {
   const move = trade.side === 'LONG' ? exit - trade.entry_price : trade.entry_price - exit;
   return move / r;
 }
+// 計算分批出場的加權平均 R 倍數與已出場股數
+function calcExitsStats(trade) {
+  const exits = Array.isArray(trade.exits) ? trade.exits : [];
+  const r = calcR(trade.entry_price, trade.stop, trade.side);
+  let totalShares = 0, weighted = 0, hasR = false;
+  for (const e of exits) {
+    const s = parseInt(e.shares) || 0;
+    if (s <= 0) continue;
+    totalShares += s;
+    if (r && r > 0 && e.price) {
+      const move = trade.side === 'SHORT' ? trade.entry_price - e.price : e.price - trade.entry_price;
+      weighted += s * (move / r);
+      hasR = true;
+    }
+  }
+  return {
+    count: exits.length,
+    exitedShares: totalShares,
+    avgR: (hasR && totalShares > 0) ? (weighted / totalShares) : null,
+    remaining: (trade.shares || 0) - totalShares,
+  };
+}
 function calcPnL(trade) {
   if (trade.status !== 'CLOSED' || !trade.exit_price) return null;
   const dir = trade.side === 'LONG' ? 1 : -1;
@@ -143,6 +165,7 @@ function clearForm() {
   $('j_entry_date').value = today();
   $('j_exit_date').value = '';
   $('j_delete').style.display = 'none';
+  renderExitsTable([]);
   updatePreview();
 }
 
@@ -167,6 +190,7 @@ function readForm() {
     exit_price: parseFloat($('j_exit_price').value) || null,
     exit_reason: $('j_exit_reason').value || null,
     note: $('j_note').value.trim(),
+    exits: collectExits(),
     created_at: state.editingId ? null : new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -195,8 +219,71 @@ function fillForm(t) {
   $('j_exit_reason').value = t.exit_reason || '';
   $('j_note').value = t.note || '';
   $('j_delete').style.display = 'inline-block';
+  renderExitsTable(Array.isArray(t.exits) ? t.exits : []);
   updatePreview();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ===== 分批出場 UI =====
+const EXIT_REASONS = [
+  ['', '—'], ['STOP', '觸發止損'], ['2R', '達 2R 減倉'], ['3R', '達 3R 減倉'],
+  ['EMA10', '跌破 EMA10'], ['EMA20', '跌破 EMA20'],
+  ['FAILED_BREAKOUT', '假突破當日出'], ['DISCRETION', '主觀判斷'], ['OTHER', '其他'],
+];
+
+function renderExitsTable(exits) {
+  const body = $('j_exits_body');
+  if (!body) return;
+  body.innerHTML = '';
+  (exits || []).forEach(e => addExitRow(e));
+  toggleExitsEmpty();
+}
+
+function addExitRow(data = {}) {
+  const body = $('j_exits_body');
+  if (!body) return;
+  const tr = document.createElement('tr');
+  const reasonOptions = EXIT_REASONS.map(([v, t]) =>
+    `<option value="${v}"${(data.reason || '') === v ? ' selected' : ''}>${t}</option>`).join('');
+  tr.innerHTML = `
+    <td><input type="date" class="x-date" value="${data.date || today()}"></td>
+    <td><input type="number" step="1" class="x-shares" value="${data.shares ?? ''}"></td>
+    <td><input type="number" step="0.01" class="x-price" value="${data.price ?? ''}"></td>
+    <td><select class="x-reason">${reasonOptions}</select></td>
+    <td class="rmult-cell" data-rmult>—</td>
+    <td><button type="button" class="btn-x" title="刪除">×</button></td>
+  `;
+  tr.querySelector('.btn-x').addEventListener('click', () => {
+    tr.remove();
+    toggleExitsEmpty();
+    updatePreview();
+  });
+  tr.querySelectorAll('input, select').forEach(el => {
+    el.addEventListener('input', updatePreview);
+    el.addEventListener('change', updatePreview);
+  });
+  body.appendChild(tr);
+  toggleExitsEmpty();
+}
+
+function toggleExitsEmpty() {
+  const body = $('j_exits_body');
+  const empty = $('j_exits_empty');
+  if (!body || !empty) return;
+  empty.style.display = body.children.length === 0 ? 'block' : 'none';
+}
+
+function collectExits() {
+  const rows = document.querySelectorAll('#j_exits_body tr');
+  const out = [];
+  rows.forEach(tr => {
+    const date = tr.querySelector('.x-date')?.value || '';
+    const shares = parseInt(tr.querySelector('.x-shares')?.value) || 0;
+    const price = parseFloat(tr.querySelector('.x-price')?.value) || 0;
+    const reason = tr.querySelector('.x-reason')?.value || '';
+    if (shares > 0 && price > 0) out.push({ date, shares, price, reason });
+  });
+  return out;
 }
 
 function updatePreview() {
@@ -227,6 +314,48 @@ function updatePreview() {
   } else {
     ['j_r','j_rpct','j_radr','j_invest','j_risk','j_2r','j_3r','j_rmult'].forEach(id => $(id).textContent = '—');
   }
+  // 分批出場 — 同步表格個別 R 倍數 + 總計
+  let totalShares = 0, weighted = 0, hasR = false;
+  document.querySelectorAll('#j_exits_body tr').forEach(tr => {
+    const s = parseInt(tr.querySelector('.x-shares')?.value) || 0;
+    const p = parseFloat(tr.querySelector('.x-price')?.value) || 0;
+    const cell = tr.querySelector('[data-rmult]');
+    if (cell) {
+      cell.textContent = '—';
+      cell.classList.remove('pos','neg');
+    }
+    if (s > 0) totalShares += s;
+    if (s > 0 && p > 0 && r && r > 0 && entry > 0) {
+      const move = side === 'SHORT' ? entry - p : p - entry;
+      const rm = move / r;
+      weighted += s * rm;
+      hasR = true;
+      if (cell) {
+        cell.textContent = fmtR(rm);
+        cell.classList.add(rm >= 0 ? 'pos' : 'neg');
+      }
+    }
+  });
+  const rEl = $('j_realized_r');
+  const remEl = $('j_exited_remaining');
+  if (rEl) {
+    if (hasR && totalShares > 0) {
+      const avg = weighted / totalShares;
+      rEl.textContent = fmtR(avg);
+      rEl.className = 'mono big ' + (avg >= 0 ? 'pos' : 'neg');
+    } else {
+      rEl.textContent = '—';
+      rEl.className = 'mono big';
+    }
+  }
+  if (remEl) {
+    if (totalShares > 0 || shares > 0) {
+      const remain = (shares || 0) - totalShares;
+      remEl.textContent = `${fmt(totalShares)} / ${fmt(remain)}`;
+    } else {
+      remEl.textContent = '—';
+    }
+  }
 }
 
 // ===== Journal List =====
@@ -249,6 +378,10 @@ function renderJournalList() {
     const rm = calcRMultiple(t);
     const pnl = calcPnL(t);
     const r = calcR(t.entry_price, t.stop, t.side);
+    const ex = calcExitsStats(t);
+    const exitBadge = ex.count > 0
+      ? `· ⚡ 已分批 ${ex.count} 筆${ex.avgR != null ? ` / 平均 ${fmtR(ex.avgR)}` : ''}${ex.remaining > 0 ? ` / 剩 ${fmt(ex.remaining)}股` : ''}`
+      : '';
     return `<div class="trade" data-id="${t.id}">
       <div>
         <div class="sym">${t.symbol}</div>
@@ -256,7 +389,7 @@ function renderJournalList() {
       </div>
       <div>
         <div>${t.entry_date||''} ${t.side==='SHORT'?'🔻':'🔺'} @${fmt(t.entry_price,2)} × ${fmt(t.shares)}</div>
-        <div class="meta">止損 ${fmt(t.stop,2)}｜R=${r?r.toFixed(2):'—'}｜${t.setup||'—'}${t.exit_reason?' · '+t.exit_reason:''}</div>
+        <div class="meta">止損 ${fmt(t.stop,2)}｜R=${r?r.toFixed(2):'—'}｜${t.setup||'—'}${t.exit_reason?' · '+t.exit_reason:''}${exitBadge}</div>
       </div>
       <div class="status-tag ${t.status}">${t.status==='OPEN'?'持有':'平倉'}</div>
       <div class="pnl ${pnl>=0?'pos':'neg'}">${pnl!=null?(pnl>=0?'+':'')+fmt(pnl,0):''}</div>
@@ -682,7 +815,11 @@ async function fetchJournalData() {
     if (d.name && !$('j_name').value) $('j_name').value = d.name;
     if (d.exchange) {
       const sel = $('j_market');
-      if (sel && !sel.dataset.userSet) sel.value = d.exchange;
+      if (sel && !sel.dataset.userSet) {
+        // 將後端回傳的 exchange 對映到 select option (NASDAQ/NYSE → US, TPEX → TPEX, 其他保留)
+        const map = { NASDAQ: 'US', NYSE: 'US', AMEX: 'US', ARCA: 'US', BATS: 'US' };
+        sel.value = map[d.exchange] || d.exchange;
+      }
     }
     if (!$('j_entry_price').value) $('j_entry_price').value = d.close;
     $('j_day_high').value = d.high;
@@ -766,6 +903,8 @@ window.addEventListener('load', () => {
   setTimeout(() => {
     const fb = $('j_fetch'); if (fb) fb.addEventListener('click', fetchJournalData);
     const cb = $('c_fetch'); if (cb) cb.addEventListener('click', fetchCalcData);
+    const exitAddBtn = $('j_exit_add');
+    if (exitAddBtn) exitAddBtn.addEventListener('click', () => { addExitRow({}); updatePreview(); });
     // 代碼欄輸入完點離（blur）自動抓資料
     const jSym = $('j_symbol');
     if (jSym) {
@@ -792,8 +931,111 @@ window.addEventListener('load', () => {
     const co = $('copy_orders'); if (co) co.addEventListener('click', copyTomorrowOrders);
     const ra = $('refresh_active'); if (ra) ra.addEventListener('click', refreshActivePrices);
     const ctj = $('c_to_journal'); if (ctj) ctj.addEventListener('click', calcToJournal);
+
+    // 持倉 sub-tabs、IBKR 抓取
+    document.querySelectorAll('#v_active .sub-tab').forEach(b => {
+      b.addEventListener('click', () => switchActiveMarket(b.dataset.mkt));
+    });
+    const ib = $('ibkr_fetch'); if (ib) ib.addEventListener('click', fetchIbkrPositions);
   }, 200);
 });
+
+// ===== 持倉 sub-tab 切換 (台股 / 美股) =====
+function switchActiveMarket(mkt) {
+  document.querySelectorAll('#v_active .sub-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.mkt === mkt);
+  });
+  $('active_pane_tw').style.display = (mkt === 'TW') ? '' : 'none';
+  $('active_pane_us').style.display = (mkt === 'US') ? '' : 'none';
+}
+
+// ===== IBKR 美股持倉 =====
+let _ibkrLoading = false;
+async function fetchIbkrPositions() {
+  if (_ibkrLoading) return;
+  _ibkrLoading = true;
+  const btn = $('ibkr_fetch');
+  const stat = $('ibkr_status');
+  const list = $('ibkr_list');
+  const sumBox = $('ibkr_summary');
+  btn.disabled = true;
+  btn.textContent = '⏳ 拉取中 (10–30秒)...';
+  stat.textContent = '啟動 ibeam container 並等待認證中...';
+  list.innerHTML = '<div class="hint">拉取中, 請稍候...</div>';
+  sumBox.style.display = 'none';
+  try {
+    const r = await fetch('/api/ibkr/positions');
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      const msg = data.error || `HTTP ${r.status}`;
+      list.innerHTML = `<div class="hint" style="color:var(--neg)">❌ ${escapeHtml(msg)}</div>`;
+      stat.textContent = '';
+      toast('IBKR 拉取失敗：' + msg, 'err');
+      return;
+    }
+    renderIbkrPositions(data);
+    stat.textContent = `✅ ${data.count} 檔｜${new Date(data.fetched_at).toLocaleString('zh-TW',{hour12:false})}`;
+    toast(`✅ IBKR 拉取完成 (${data.count} 檔)`);
+  } catch (e) {
+    list.innerHTML = `<div class="hint" style="color:var(--neg)">❌ 網路錯誤：${escapeHtml(String(e))}</div>`;
+    toast('網路錯誤', 'err');
+  } finally {
+    _ibkrLoading = false;
+    btn.disabled = false;
+    btn.textContent = '🔄 重新抓取';
+  }
+}
+
+function renderIbkrPositions(data) {
+  const list = $('ibkr_list');
+  const sumBox = $('ibkr_summary');
+  const positions = data.positions || [];
+  if (!positions.length) {
+    list.innerHTML = '<div class="hint">目前 IBKR 帳戶無持倉。</div>';
+    sumBox.style.display = 'none';
+    return;
+  }
+  // 汇總
+  let totalMV = 0, totalPnL = 0, totalCost = 0;
+  positions.forEach(p => {
+    totalMV += p.market_value || 0;
+    totalPnL += p.unrealized_pnl || 0;
+    totalCost += (p.qty * p.avg_cost) || 0;
+  });
+  const totalPct = totalCost ? (totalPnL / totalCost * 100) : 0;
+  const pnlCls = totalPnL >= 0 ? 'pos' : 'neg';
+  const sign = totalPnL >= 0 ? '+' : '';
+  sumBox.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+      <div><div class="hint">總市值</div><div class="mono" style="font-size:18px;font-weight:600">$${fmt(totalMV,2)}</div></div>
+      <div><div class="hint">未實現損益</div><div class="mono ${pnlCls}" style="font-size:18px;font-weight:600">${sign}$${fmt(totalPnL,2)}</div></div>
+      <div><div class="hint">報酬率</div><div class="mono ${pnlCls}" style="font-size:18px;font-weight:600">${sign}${totalPct.toFixed(2)}%</div></div>
+    </div>`;
+  sumBox.style.display = '';
+  // 個股列
+  list.innerHTML = positions.map(p => {
+    const cls = (p.unrealized_pnl >= 0) ? 'pos' : 'neg';
+    const sg = (p.unrealized_pnl >= 0) ? '+' : '';
+    return `<div class="ibkr-row">
+      <div>
+        <div class="sym">${escapeHtml(p.symbol)}</div>
+        <div class="meta">${escapeHtml(p.name||'')}</div>
+      </div>
+      <div>
+        <div>${fmt(p.qty)} 股 × 成本 $${fmt(p.avg_cost,2)}</div>
+        <div class="meta">現價 $${fmt(p.market_price,2)}｜市值 $${fmt(p.market_value,2)}｜${p.currency}</div>
+      </div>
+      <div class="pnl">
+        <div class="big ${cls}">${sg}$${fmt(p.unrealized_pnl,2)}</div>
+        <div class="pct ${cls}">${sg}${p.pnl_pct.toFixed(2)}%</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 // ===== 計算頁一鍵帶入日誌 =====
 function calcToJournal() {

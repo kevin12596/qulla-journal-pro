@@ -4,3 +4,11 @@ __pycache__/
 .wrangler/
 node_modules/
 HANDOFF.local.md
+# OpenClaw workspace bootstrap files (auto-generated, not project code)
+.openclaw/
+AGENTS.md
+SOUL.md
+USER.md
+IDENTITY.md
+TOOLS.md
+HEARTBEAT.md

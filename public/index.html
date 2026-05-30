@@ -130,6 +130,29 @@
           <option value="OTHER">其他</option>
         </select>
       </div>
+
+      <!-- 分批出場記錄 -->
+      <div class="field full">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label style="margin:0">⚡ 分批出場記錄</label>
+          <button class="btn sm" id="j_exit_add" type="button">+ 新增出場</button>
+        </div>
+        <table id="j_exits_table" class="exits-table">
+          <thead>
+            <tr>
+              <th style="width:120px">日期</th>
+              <th style="width:80px">股數</th>
+              <th style="width:90px">價格</th>
+              <th style="width:130px">原因</th>
+              <th style="width:70px">R 倍數</th>
+              <th style="width:40px"></th>
+            </tr>
+          </thead>
+          <tbody id="j_exits_body">
+          </tbody>
+        </table>
+        <div id="j_exits_empty" class="hint" style="text-align:center;padding:8px 0;color:#888">尚無分批出場紀錄</div>
+      </div>
       <div class="field">
         <label>突破點</label>
         <input type="number" step="0.01" id="j_breakout" placeholder="若是突破單填入">
@@ -163,6 +186,8 @@
         <div><span class="lbl">2R 價</span><span id="j_2r" class="mono">—</span></div>
         <div><span class="lbl">3R 價</span><span id="j_3r" class="mono">—</span></div>
         <div><span class="lbl">目前 R-multiple</span><span id="j_rmult" class="mono big">—</span></div>
+        <div><span class="lbl">已實現 R（加權）</span><span id="j_realized_r" class="mono big">—</span></div>
+        <div><span class="lbl">已出場 / 剩餘</span><span id="j_exited_remaining" class="mono">—</span></div>
       </div>
     </div>
 
@@ -302,12 +327,33 @@
 <!-- ========== 持倉中 ========== -->
 <section class="view" id="v_active">
   <div class="card">
-    <h2>持倉狀態總覽</h2>
-    <div class="actions" style="margin-bottom:12px">
-      <button class="btn primary" id="copy_orders" type="button">📋 複製明日掛單清單</button>
-      <button class="btn" id="refresh_active" type="button">🔄 重新抓即時價</button>
+    <div class="card-head">
+      <h2>持倉狀態總覽</h2>
+      <div class="sub-tabs" role="tablist">
+        <button class="sub-tab active" data-mkt="TW" type="button">📍 台股</button>
+        <button class="sub-tab" data-mkt="US" type="button">💵 美股（IBKR）</button>
+      </div>
     </div>
-    <div id="active_list"></div>
+
+    <!-- 台股區 -->
+    <div id="active_pane_tw" class="sub-pane">
+      <div class="actions" style="margin-bottom:12px">
+        <button class="btn primary" id="copy_orders" type="button">📋 複製明日掛單清單</button>
+        <button class="btn" id="refresh_active" type="button">🔄 重新抓即時價</button>
+      </div>
+      <div id="active_list"></div>
+    </div>
+
+    <!-- 美股區（IBKR） -->
+    <div id="active_pane_us" class="sub-pane" style="display:none">
+      <div class="actions" style="margin-bottom:12px">
+        <button class="btn primary" id="ibkr_fetch" type="button">🔄 從 IBKR 抓持倉</button>
+        <span class="hint" id="ibkr_status" style="margin-left:10px"></span>
+      </div>
+      <p class="hint">資料來源：IBKR API（顯示 USD、不換匯率）。首次點選會啟動 ibeam container，約等 10–30 秒。</p>
+      <div id="ibkr_summary" class="calc-result" style="display:none;margin-bottom:12px"></div>
+      <div id="ibkr_list"><div class="hint">尚未拉取 IBKR 資料。</div></div>
+    </div>
   </div>
 </section>
 

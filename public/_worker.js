@@ -113,12 +113,13 @@ async function handleJournal(request, env, url) {
 }
 
 async function upsertTrade(DB, userId, t) {
+  const exitsJson = Array.isArray(t.exits) && t.exits.length ? JSON.stringify(t.exits) : null;
   await DB.prepare(
     `INSERT INTO trades
        (id, user_id, symbol, name, market, direction, entry_date, entry_avg, shares,
         stop, high_day, low_day, adr_pct, status, exit_date, exit_avg, exit_reason,
-        breakout, setup, notes, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        breakout, setup, notes, exits, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(id) DO UPDATE SET
        symbol=excluded.symbol, name=excluded.name, market=excluded.market,
        direction=excluded.direction, entry_date=excluded.entry_date,
@@ -126,7 +127,8 @@ async function upsertTrade(DB, userId, t) {
        high_day=excluded.high_day, low_day=excluded.low_day, adr_pct=excluded.adr_pct,
        status=excluded.status, exit_date=excluded.exit_date, exit_avg=excluded.exit_avg,
        exit_reason=excluded.exit_reason, breakout=excluded.breakout,
-       setup=excluded.setup, notes=excluded.notes, updated_at=excluded.updated_at`
+       setup=excluded.setup, notes=excluded.notes, exits=excluded.exits,
+       updated_at=excluded.updated_at`
   ).bind(
     t.id, userId,
     t.symbol ?? null, t.name ?? null, t.market ?? null, t.side ?? null,
@@ -134,11 +136,16 @@ async function upsertTrade(DB, userId, t) {
     t.stop ?? null, t.day_high ?? null, t.day_low ?? null, t.adr ?? null,
     t.status ?? null, t.exit_date ?? null, t.exit_price ?? null, t.exit_reason ?? null,
     t.breakout ?? null, t.setup ?? null, t.note ?? null,
+    exitsJson,
     Date.now()
   ).run();
 }
 
 function rowToTrade(r) {
+  let exits = [];
+  if (r.exits) {
+    try { exits = JSON.parse(r.exits) || []; } catch (e) { exits = []; }
+  }
   return {
     id: r.id,
     symbol: r.symbol, name: r.name, market: r.market, side: r.direction,
@@ -146,7 +153,8 @@ function rowToTrade(r) {
     stop: r.stop, day_high: r.high_day, day_low: r.low_day, adr: r.adr_pct,
     status: r.status, exit_date: r.exit_date, exit_price: r.exit_avg,
     exit_reason: r.exit_reason, breakout: r.breakout, setup: r.setup,
-    note: r.notes, updated_at: r.updated_at,
+    note: r.notes, exits,
+    updated_at: r.updated_at,
   };
 }
 function rowToSettings(r) {

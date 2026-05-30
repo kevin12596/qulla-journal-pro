@@ -368,3 +368,53 @@ main { padding: 16px; max-width: 1200px; margin: 0 auto; }
 }
 
 textarea { resize: vertical; }
+
+/* ===== Sub-tabs (台股/美股切換) ===== */
+.sub-tabs {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--bg-elev);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.sub-tab {
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+.sub-tab:hover { color: var(--text); }
+.sub-tab.active {
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+
+/* IBKR 持倉 row */
+.ibkr-row { display: grid; grid-template-columns: 90px 1fr auto; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); align-items: center; }
+.ibkr-row:last-child { border-bottom: none; }
+.ibkr-row .sym { font-weight: 600; font-size: 15px; }
+.ibkr-row .meta { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.ibkr-row .pnl { text-align: right; font-family: 'SF Mono', monospace; }
+.ibkr-row .pnl .big { font-size: 15px; font-weight: 600; }
+.ibkr-row .pnl .pct { font-size: 12px; }
+
+
+/* 分批出場表格 */
+.exits-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.exits-table th, .exits-table td { padding: 6px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+.exits-table th { color: var(--text-muted); font-weight: 500; font-size: 12px; }
+.exits-table input, .exits-table select { width: 100%; padding: 4px 6px; font-size: 13px; box-sizing: border-box; }
+.exits-table .rmult-cell { font-family: 'SF Mono', monospace; font-weight: 600; text-align: right; }
+.exits-table .rmult-cell.pos { color: var(--pos, #16a34a); }
+.exits-table .rmult-cell.neg { color: var(--neg, #dc2626); }
+.exits-table .btn-x { background: transparent; border: 0; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 2px 6px; }
+.exits-table .btn-x:hover { color: var(--neg, #dc2626); }
+.exits-table tbody:empty + #j_exits_empty { display: block; }
